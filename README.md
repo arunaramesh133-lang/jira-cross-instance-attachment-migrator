@@ -61,4 +61,73 @@ It enables:
 
 ---
 
+## 📂 Project Structure
+src/
+ ├── JiraAttachmentCsvRunner.java
+ ├── JiraIssueBulkAttachmentMigratorCsv.java
+ └── README.md
+
+sample-data/
+ └── sample-mapping.csv
+
+ ---
+
+## 🔧 Configuration
+
+Update the following values before running:
+
+SOURCE_BASE_URL = "https://your-source.atlassian.net";
+SOURCE_EMAIL = "your-email";
+SOURCE_API_TOKEN = "your-api-token";
+
+TARGET_BASE_URL = "https://your-target.atlassian.net";
+TARGET_EMAIL = "your-email";
+TARGET_API_TOKEN = "your-api-token";
+
+⚠️ Recommended: Use environment variables instead of hardcoding credentials.
+
+---
+
+## ▶️ How to Run
+Prepare CSV file with source and target issue keys
+Update configuration in JiraIssueBulkAttachmentMigratorCsv.java
+Run JiraAttachmentCsvRunner.java
+Monitor console logs for progress
+
+---
+
+## 📊 Example CSV
+Source Key,Target Key
+TUD-1127,DUM-13017
+TUD-1128,DUM-13018
+
+---
+
 ## 🔗 Atlassian Community Discussion Check out the full discussion here: [View Post](https://community.atlassian.com/forums/Jira-questions/How-can-we-migrate-Jira-attachments-across-instances-using-REST/qaq-p/3213603#M1174241)
+
+---
+
+## 💛 Learning Outcome
+
+This project demonstrates how Jira can be extended beyond UI limitations using engineering approaches.
+
+It reflects:
+
+REST API integration skills
+Backend problem-solving
+System design thinking
+Handling real-world API challenges
+
+---
+
+## 🤝 Contributions
+
+Feel free to raise issues or suggest improvements.
+
+---
+
+## ⭐ If you find this useful
+
+Give it a star ⭐ and share your feedback!
+
+---
