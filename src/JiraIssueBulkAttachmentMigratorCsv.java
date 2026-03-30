@@ -17,16 +17,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 public class JiraIssueBulkAttachmentMigratorCsv {
 
     // ========= CONFIG =========
-    private static final String SOURCE_BASE_URL = "Your_Base_Instance_Link";
-    private static final String SOURCE_EMAIL = "YOUR_EMAIL";
-    private static final String SOURCE_API_TOKEN = "YOUR_Jira_API_Token";
+    private static final String SOURCE_BASE_URL = "Your_Source_Instance_Link";
+    private static final String SOURCE_EMAIL = "Your_Email";
+    private static final String SOURCE_API_TOKEN = "Your_Jira_API_Token";
 
     private static final String TARGET_BASE_URL = "Your_Target_Instance_Link";
-    private static final String TARGET_EMAIL = "YOUR_EMAIL";
-    private static final String TARGET_API_TOKEN = "YOUR_Jira_API_Token";
+    private static final String TARGET_EMAIL = "Your_Email";
+    private static final String TARGET_API_TOKEN = "Your_Jira_API_Token";
 
+    // ✅ Thread pool (optimized)
     private static final ExecutorService executor = Executors.newFixedThreadPool(8);
 
+    // ✅ File size limit (10MB)
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024;
 
     public static void migrate(String sourceIssueKey, String targetIssueKey) throws Exception {
@@ -47,6 +49,7 @@ public class JiraIssueBulkAttachmentMigratorCsv {
 
         System.out.println("\n🔎 Migrating: " + sourceIssueKey + " → " + targetIssueKey);
 
+        // ---------- FETCH ----------
         HttpRequest issueRequest = HttpRequest.newBuilder()
                 .uri(URI.create(SOURCE_BASE_URL + "/rest/api/3/issue/" + sourceIssueKey + "?fields=attachment"))
                 .header("Authorization", "Basic " + sourceAuth)
@@ -67,13 +70,19 @@ public class JiraIssueBulkAttachmentMigratorCsv {
 
         System.out.println("📎 Found " + attachments.size() + " attachments");
 
+        // ---------- PARALLEL PROCESS ----------
         for (JsonNode attachment : attachments) {
             executor.submit(() -> processAttachment(
-                    attachment, client, sourceAuth, targetAuth, targetIssueKey
+                    attachment,
+                    client,
+                    sourceAuth,
+                    targetAuth,
+                    targetIssueKey
             ));
         }
     }
 
+    // ================= PROCESS EACH FILE =================
     private static void processAttachment(
             JsonNode attachment,
             HttpClient client,
@@ -82,35 +91,40 @@ public class JiraIssueBulkAttachmentMigratorCsv {
             String targetIssueKey
     ) {
 
-        String id = attachment.get("id").asText();
+        String attachmentId = attachment.get("id").asText();
         String fileName = attachment.get("filename").asText();
-        long size = attachment.get("size").asLong();
+        long fileSize = attachment.get("size").asLong();
 
         try {
             System.out.println("➡️ Processing: " + fileName);
 
-            if (size > MAX_FILE_SIZE) {
+            // ✅ SIZE CHECK
+            if (fileSize > MAX_FILE_SIZE) {
                 System.out.println("⚠️ Skipped (Too Large): " + fileName);
                 return;
             }
 
+            // ---------- DOWNLOAD ----------
             System.out.println("⬇ Downloading: " + fileName);
 
             HttpRequest downloadRequest = HttpRequest.newBuilder()
-                    .uri(URI.create(SOURCE_BASE_URL + "/rest/api/3/attachment/content/" + id))
+                    .uri(URI.create(SOURCE_BASE_URL + "/rest/api/3/attachment/content/" + attachmentId))
                     .header("Authorization", "Basic " + sourceAuth)
                     .GET()
                     .build();
 
-            InputStream sourceStream = client
-                    .send(downloadRequest, HttpResponse.BodyHandlers.ofInputStream())
-                    .body();
+            HttpResponse<InputStream> downloadResponse =
+                    client.send(downloadRequest, HttpResponse.BodyHandlers.ofInputStream());
 
+            InputStream sourceStream = downloadResponse.body();
+
+            // ---------- STREAM ----------
             String boundary = "----Boundary" + System.currentTimeMillis();
 
             PipedOutputStream pipeOut = new PipedOutputStream();
             PipedInputStream pipeIn = new PipedInputStream(pipeOut);
 
+            // ✅ FIXED: Start thread properly
             Thread streamThread = new Thread(() -> {
                 try (OutputStream out = pipeOut;
                      InputStream in = sourceStream) {
@@ -127,18 +141,20 @@ public class JiraIssueBulkAttachmentMigratorCsv {
                         out.write(buffer, 0, read);
                     }
 
-                    out.write(("\r\n--" + boundary + "--\r\n")
-                            .getBytes(StandardCharsets.UTF_8));
+                    String closing = "\r\n--" + boundary + "--\r\n";
+                    out.write(closing.getBytes(StandardCharsets.UTF_8));
 
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
             });
 
-            streamThread.start();
+            streamThread.start(); // ✅ IMPORTANT FIX
 
+            // ---------- SMALL DELAY (avoid rate limit) ----------
             Thread.sleep(200);
 
+            // ---------- UPLOAD ----------
             HttpRequest uploadRequest = HttpRequest.newBuilder()
                     .uri(URI.create(TARGET_BASE_URL + "/rest/api/3/issue/" + targetIssueKey + "/attachments"))
                     .header("Authorization", "Basic " + targetAuth)
@@ -147,12 +163,14 @@ public class JiraIssueBulkAttachmentMigratorCsv {
                     .POST(HttpRequest.BodyPublishers.ofInputStream(() -> pipeIn))
                     .build();
 
-            HttpResponse<String> response = sendWithRetry(client, uploadRequest);
+            HttpResponse<String> uploadResponse = sendWithRetry(client, uploadRequest);
 
-            if (response.statusCode() == 200 || response.statusCode() == 201) {
+            int status = uploadResponse.statusCode();
+
+            if (status == 200 || status == 201) {
                 System.out.println("⬆ Uploaded: " + fileName);
             } else {
-                System.out.println("❌ Failed: " + fileName + " | " + response.statusCode());
+                System.out.println("❌ Failed: " + fileName + " | HTTP " + status);
             }
 
         } catch (Exception e) {
@@ -161,31 +179,37 @@ public class JiraIssueBulkAttachmentMigratorCsv {
         }
     }
 
+    // ================= RETRY =================
     private static HttpResponse<String> sendWithRetry(
             HttpClient client,
             HttpRequest request
     ) throws Exception {
 
-        int retries = 3;
-        long wait = 1000;
+        int maxRetries = 3;
+        int attempt = 0;
+        long waitTime = 1000;
 
-        for (int i = 0; i < retries; i++) {
+        while (attempt < maxRetries) {
 
-            HttpResponse<String> res =
+            HttpResponse<String> response =
                     client.send(request, HttpResponse.BodyHandlers.ofString());
 
-            if (res.statusCode() == 200 || res.statusCode() == 201) {
-                return res;
+            int status = response.statusCode();
+
+            if (status == 200 || status == 201) {
+                return response;
             }
 
-            if (res.statusCode() == 429 || res.statusCode() >= 500) {
-                Thread.sleep(wait);
-                wait *= 2;
+            if (status == 429 || status >= 500) {
+                System.out.println("⚠️ Retry " + (attempt + 1) + " HTTP " + status);
+                Thread.sleep(waitTime);
+                waitTime *= 2;
+                attempt++;
             } else {
-                return res;
+                return response;
             }
         }
 
-        throw new RuntimeException("Failed after retries");
+        throw new RuntimeException("❌ Failed after retries");
     }
 }
