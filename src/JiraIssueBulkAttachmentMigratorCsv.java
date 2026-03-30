@@ -8,48 +8,28 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-/**
- * CSV-SPECIFIC MIGRATOR
- * ---------------------------------
- * This class is a SAFE DUPLICATE of the
- * working demo migrator.
- *
- * It supports dynamic source/target keys
- * and is ONLY used by CSV runner.
- *
- * Original demo migrator remains untouched.
- */
 public class JiraIssueBulkAttachmentMigratorCsv {
 
-    // ========= SOURCE CONFIG =========
-    private static final String SOURCE_BASE_URL =
-            "https://jiraplatformengineer.atlassian.net";
-    private static final String SOURCE_EMAIL =
-            "arunaramesh133@gmail.com";
-    private static final String SOURCE_API_TOKEN =
-            "ZZZ";
-    // =================================
+    // ========= CONFIG =========
+    private static final String SOURCE_BASE_URL = "Your_Base_Instance_Link";
+    private static final String SOURCE_EMAIL = "YOUR_EMAIL";
+    private static final String SOURCE_API_TOKEN = "YOUR_Jira_API_Token";
 
-    // ========= TARGET CONFIG =========
-    private static final String TARGET_BASE_URL =
-            "https://jirademo112.atlassian.net";
-    private static final String TARGET_EMAIL =
-            "arunaramesh133@gmail.com";
-    private static final String TARGET_API_TOKEN =
-            "xxx";
-    // =================================
+    private static final String TARGET_BASE_URL = "Your_Target_Instance_Link";
+    private static final String TARGET_EMAIL = "YOUR_EMAIL";
+    private static final String TARGET_API_TOKEN = "YOUR_Jira_API_Token";
 
-    /**
-     * Entry point used by CSV runner
-     */
-    public static void migrate(
-            String sourceIssueKey,
-            String targetIssueKey
-    ) throws Exception {
+    private static final ExecutorService executor = Executors.newFixedThreadPool(8);
+
+    private static final long MAX_FILE_SIZE = 10 * 1024 * 1024;
+
+    public static void migrate(String sourceIssueKey, String targetIssueKey) throws Exception {
 
         HttpClient client = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.ALWAYS)
@@ -65,89 +45,81 @@ public class JiraIssueBulkAttachmentMigratorCsv {
                 .encodeToString((TARGET_EMAIL + ":" + TARGET_API_TOKEN)
                         .getBytes(StandardCharsets.UTF_8));
 
-        System.out.println(
-                "🔎 CSV Migrating attachments: "
-                        + sourceIssueKey + " → " + targetIssueKey);
+        System.out.println("\n🔎 Migrating: " + sourceIssueKey + " → " + targetIssueKey);
 
-        // ---------- FETCH ATTACHMENTS ----------
         HttpRequest issueRequest = HttpRequest.newBuilder()
-                .uri(URI.create(
-                        SOURCE_BASE_URL
-                                + "/rest/api/3/issue/"
-                                + sourceIssueKey
-                                + "?fields=attachment"))
+                .uri(URI.create(SOURCE_BASE_URL + "/rest/api/3/issue/" + sourceIssueKey + "?fields=attachment"))
                 .header("Authorization", "Basic " + sourceAuth)
                 .header("Accept", "application/json")
                 .GET()
                 .build();
 
-        HttpResponse<String> issueResponse =
-                client.send(issueRequest,
-                        HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> issueResponse = sendWithRetry(client, issueRequest);
 
-        JsonNode attachments =
-                mapper.readTree(issueResponse.body())
-                        .path("fields")
-                        .path("attachment");
+        JsonNode attachments = mapper.readTree(issueResponse.body())
+                .path("fields")
+                .path("attachment");
 
         if (!attachments.isArray() || attachments.size() == 0) {
-            System.out.println(
-                    "ℹ️ No attachments found on " + sourceIssueKey);
+            System.out.println("ℹ️ No attachments found");
             return;
         }
 
-        System.out.println(
-                "📎 Found " + attachments.size() + " attachments");
+        System.out.println("📎 Found " + attachments.size() + " attachments");
 
-        // ---------- LOOP ATTACHMENTS ----------
         for (JsonNode attachment : attachments) {
+            executor.submit(() -> processAttachment(
+                    attachment, client, sourceAuth, targetAuth, targetIssueKey
+            ));
+        }
+    }
 
-            String attachmentId =
-                    attachment.get("id").asText();
-            String fileName =
-                    attachment.get("filename").asText();
+    private static void processAttachment(
+            JsonNode attachment,
+            HttpClient client,
+            String sourceAuth,
+            String targetAuth,
+            String targetIssueKey
+    ) {
 
-            System.out.println("➡️ Uploading: " + fileName);
+        String id = attachment.get("id").asText();
+        String fileName = attachment.get("filename").asText();
+        long size = attachment.get("size").asLong();
 
-            // ---------- DOWNLOAD STREAM ----------
-            HttpRequest downloadRequest =
-                    HttpRequest.newBuilder()
-                            .uri(URI.create(
-                                    SOURCE_BASE_URL
-                                            + "/rest/api/3/attachment/content/"
-                                            + attachmentId))
-                            .header("Authorization", "Basic " + sourceAuth)
-                            .GET()
-                            .build();
+        try {
+            System.out.println("➡️ Processing: " + fileName);
 
-            HttpResponse<InputStream> downloadResponse =
-                    client.send(downloadRequest,
-                            HttpResponse.BodyHandlers.ofInputStream());
+            if (size > MAX_FILE_SIZE) {
+                System.out.println("⚠️ Skipped (Too Large): " + fileName);
+                return;
+            }
 
-            InputStream sourceStream =
-                    downloadResponse.body();
+            System.out.println("⬇ Downloading: " + fileName);
 
-            // ---------- MULTIPART STREAM ----------
-            String boundary =
-                    "----Boundary" + System.currentTimeMillis();
+            HttpRequest downloadRequest = HttpRequest.newBuilder()
+                    .uri(URI.create(SOURCE_BASE_URL + "/rest/api/3/attachment/content/" + id))
+                    .header("Authorization", "Basic " + sourceAuth)
+                    .GET()
+                    .build();
 
-            PipedOutputStream pipeOut =
-                    new PipedOutputStream();
-            PipedInputStream pipeIn =
-                    new PipedInputStream(pipeOut);
+            InputStream sourceStream = client
+                    .send(downloadRequest, HttpResponse.BodyHandlers.ofInputStream())
+                    .body();
 
-            new Thread(() -> {
+            String boundary = "----Boundary" + System.currentTimeMillis();
+
+            PipedOutputStream pipeOut = new PipedOutputStream();
+            PipedInputStream pipeIn = new PipedInputStream(pipeOut);
+
+            Thread streamThread = new Thread(() -> {
                 try (OutputStream out = pipeOut;
                      InputStream in = sourceStream) {
 
-                    String header =
-                            "--" + boundary + "\r\n" +
-                                    "Content-Disposition: form-data; name=\"file\"; filename=\""
-                                    + fileName + "\"\r\n" +
-                                    "Content-Type: application/octet-stream\r\n\r\n";
+                    String header = "--" + boundary + "\r\n" +
+                            "Content-Disposition: form-data; name=\"file\"; filename=\"" + fileName + "\"\r\n" +
+                            "Content-Type: application/octet-stream\r\n\r\n";
 
-                    out.write(
-                            header.getBytes(StandardCharsets.UTF_8));
+                    out.write(header.getBytes(StandardCharsets.UTF_8));
 
                     byte[] buffer = new byte[8192];
                     int read;
@@ -155,52 +127,65 @@ public class JiraIssueBulkAttachmentMigratorCsv {
                         out.write(buffer, 0, read);
                     }
 
-                    String closing =
-                            "\r\n--" + boundary + "--\r\n";
-                    out.write(
-                            closing.getBytes(StandardCharsets.UTF_8));
+                    out.write(("\r\n--" + boundary + "--\r\n")
+                            .getBytes(StandardCharsets.UTF_8));
 
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
-            }).start();
+            });
 
-            // ---------- UPLOAD ----------
-            HttpRequest uploadRequest =
-                    HttpRequest.newBuilder()
-                            .uri(URI.create(
-                                    TARGET_BASE_URL
-                                            + "/rest/api/3/issue/"
-                                            + targetIssueKey
-                                            + "/attachments"))
-                            .header("Authorization", "Basic " + targetAuth)
-                            .header("X-Atlassian-Token", "no-check")
-                            .header("Content-Type",
-                                    "multipart/form-data; boundary=" + boundary)
-                            .POST(HttpRequest.BodyPublishers.ofInputStream(
-                                    () -> pipeIn))
-                            .build();
+            streamThread.start();
 
-            HttpResponse<String> uploadResponse =
-                    client.send(uploadRequest,
-                            HttpResponse.BodyHandlers.ofString());
+            Thread.sleep(200);
 
-            if (uploadResponse.statusCode() == 200
-                    || uploadResponse.statusCode() == 201) {
-                System.out.println("✅ Uploaded: " + fileName);
+            HttpRequest uploadRequest = HttpRequest.newBuilder()
+                    .uri(URI.create(TARGET_BASE_URL + "/rest/api/3/issue/" + targetIssueKey + "/attachments"))
+                    .header("Authorization", "Basic " + targetAuth)
+                    .header("X-Atlassian-Token", "no-check")
+                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                    .POST(HttpRequest.BodyPublishers.ofInputStream(() -> pipeIn))
+                    .build();
+
+            HttpResponse<String> response = sendWithRetry(client, uploadRequest);
+
+            if (response.statusCode() == 200 || response.statusCode() == 201) {
+                System.out.println("⬆ Uploaded: " + fileName);
             } else {
-                System.out.println(
-                        "❌ Failed: " + fileName
-                                + " | HTTP "
-                                + uploadResponse.statusCode());
+                System.out.println("❌ Failed: " + fileName + " | " + response.statusCode());
+            }
+
+        } catch (Exception e) {
+            System.out.println("💥 Error: " + fileName);
+            e.printStackTrace();
+        }
+    }
+
+    private static HttpResponse<String> sendWithRetry(
+            HttpClient client,
+            HttpRequest request
+    ) throws Exception {
+
+        int retries = 3;
+        long wait = 1000;
+
+        for (int i = 0; i < retries; i++) {
+
+            HttpResponse<String> res =
+                    client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (res.statusCode() == 200 || res.statusCode() == 201) {
+                return res;
+            }
+
+            if (res.statusCode() == 429 || res.statusCode() >= 500) {
+                Thread.sleep(wait);
+                wait *= 2;
+            } else {
+                return res;
             }
         }
 
-        System.out.println(
-                "🎉 CSV migration completed: "
-                        + sourceIssueKey + " → " + targetIssueKey);
-        System.out.println("DEBUG SOURCE URL = " + SOURCE_BASE_URL);
-        System.out.println("DEBUG ISSUE KEY  = " + sourceIssueKey);
-
+        throw new RuntimeException("Failed after retries");
     }
 }
