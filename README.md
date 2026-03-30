@@ -8,22 +8,23 @@
 
 Migrating attachments across Jira instances is not straightforward.
 
-Most approaches depend on:
-- Jira admins with elevated permissions
-- Paid plugins or external migration tools
+Most existing approaches depend on:
+- Jira admins with elevated permissions  
+- Paid plugins or external migration tools  
+- Full instance migration instead of selective transfer  
 
-There is no simple, flexible way to migrate attachments selectively across instances.
+There is no simple, flexible way to migrate attachments **selectively across instances**.
 
 ---
 
 ## 💡 Solution
 
-This project demonstrates how to use Jira REST APIs with Java to build a custom attachment migration solution.
+This project demonstrates how to use Jira REST APIs with Java to build a custom attachment migration engine.
 
 It enables:
-- Cross-instance attachment migration
-- Selective issue mapping using CSV
-- Fully automated execution
+- Cross-instance attachment migration  
+- Selective issue mapping using CSV  
+- Fully automated execution without plugins  
 
 ---
 
@@ -34,6 +35,8 @@ It enables:
 - 🔁 Handles multiple attachments per issue  
 - ⚡ Streaming-based transfer (no local file storage required)  
 - 🔐 Uses Jira REST API authentication  
+- 🚀 Parallel processing with controlled thread pool  
+- 🔁 Retry mechanism with exponential backoff (rate-limit safe)  
 
 ---
 
@@ -43,20 +46,19 @@ It enables:
 2. Fetch attachments from source Jira using REST API  
 3. Stream attachment data using InputStream  
 4. Upload attachments to target Jira using multipart API  
+5. Handle failures with retry logic  
 
 ---
 
 ## 🧪 Challenges Solved
 
-- ❗ 403 Authentication issues  
+- ❗ 403 Authentication & permission issues  
 - 🔀 303 Redirect handling for attachment downloads  
 - ⚡ Efficient streaming using InputStream / OutputStream  
 - 📦 Handling large-scale bulk migrations  
+- 🚫 Avoiding memory overload (no temp file storage)  
+- 🔁 Handling API rate limits with retry strategy  
 
 ---
 
-
-## 🔗 Atlassian Community Discussion
-
-Check out the full discussion here: [View Post](https://community.atlassian.com/forums/Jira-questions/How-can-we-migrate-Jira-attachments-across-instances-using-REST/qaq-p/3213603#M1174241)
-
+## 🔗 Atlassian Community Discussion Check out the full discussion here: [View Post](https://community.atlassian.com/forums/Jira-questions/How-can-we-migrate-Jira-attachments-across-instances-using-REST/qaq-p/3213603#M1174241)
