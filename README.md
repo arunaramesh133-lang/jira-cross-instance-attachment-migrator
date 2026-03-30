@@ -58,5 +58,5 @@ It enables:
 
 ## 🔗 Atlassian Community Discussion
 
-Check out the full discussion here: [View Post]([PASTE_YOUR_LINK_HERE](https://community.atlassian.com/forums/Jira-questions/How-can-we-migrate-Jira-attachments-across-instances-using-REST/qaq-p/3213603#M1174241))
+Check out the full discussion here: [View Post](https://community.atlassian.com/forums/Jira-questions/How-can-we-migrate-Jira-attachments-across-instances-using-REST/qaq-p/3213603#M1174241)
 
