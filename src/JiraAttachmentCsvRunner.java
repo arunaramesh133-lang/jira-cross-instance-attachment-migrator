@@ -3,8 +3,8 @@ import java.io.FileReader;
 
 public class JiraAttachmentCsvRunner {
 
-    private static final String CSV_PATH =
-            "C:/Users/aruna.ramesh.kumar/OneDrive - Accenture/Desktop/Cmigration/Jira Java Attachment Load.csv";
+   private static final String CSV_PATH =
+"sample-data/Jira Java Attachment Load.csv";
 
     public static void main(String[] args) {
 
